@@ -29,12 +29,64 @@ DAY_LENGTH = 600
 SPAWN_POINT = (0, 0, 0, 0, 0)
 RATE_LIMIT = False
 RECORD_HISTORY = False
-INDESTRUCTIBLE_ITEMS = set([16])
-ALLOWED_ITEMS = set([
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-    17, 18, 19, 20, 21, 22, 23,
-    32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63])
+INDESTRUCTIBLE_ITEMS = {16}
+ALLOWED_ITEMS = {
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+}
 
 AUTHENTICATE = 'A'
 BLOCK = 'B'
@@ -82,13 +134,11 @@ class RateLimiter(object):
         elapsed = now - self.last_check
         self.last_check = now
         self.allowance += elapsed * (self.rate / self.per)
-        if self.allowance > self.rate:
-            self.allowance = self.rate
+        self.allowance = min(self.allowance, self.rate)
         if self.allowance < 1:
             return True # too fast
-        else:
-            self.allowance -= 1
-            return False # okay
+        self.allowance -= 1
+        return False # okay
 
 class Server(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
     allow_reuse_address = True
@@ -121,16 +171,15 @@ class Handler(SocketServer.BaseRequestHandler):
                     buf = buf[index + 1:]
                     if not line:
                         continue
-                    if line[0] == POSITION:
-                        if self.position_limiter.tick():
-                            log('RATE', self.client_id)
-                            self.stop()
-                            return
-                    else:
-                        if self.limiter.tick():
-                            log('RATE', self.client_id)
-                            self.stop()
-                            return
+                    if (
+                        line[0] == POSITION
+                        and self.position_limiter.tick()
+                        or line[0] != POSITION
+                        and self.limiter.tick()
+                    ):
+                        log('RATE', self.client_id)
+                        self.stop()
+                        return
                     model.enqueue(model.on_data, self, line)
         finally:
             model.enqueue(model.on_disconnect, self)
@@ -272,13 +321,12 @@ class Model(object):
             'p = :p and q = :q and x = :x and y = :y and z = :z;'
         )
         p, q = chunked(x), chunked(z)
-        rows = list(self.execute(query, dict(p=p, q=q, x=x, y=y, z=z)))
-        if rows:
+        if rows := list(self.execute(query, dict(p=p, q=q, x=x, y=y, z=z))):
             return rows[0][0]
         return self.get_default_block(x, y, z)
     def next_client_id(self):
         result = 1
-        client_ids = set(x.client_id for x in self.clients)
+        client_ids = {x.client_id for x in self.clients}
         while result in client_ids:
             result += 1
         return result
@@ -307,7 +355,7 @@ class Model(object):
         log('DISC', client.client_id, *client.client_address)
         self.clients.remove(client)
         self.send_disconnect(client)
-        self.send_talk('%s has disconnected from the server.' % client.nick)
+        self.send_talk(f'{client.nick} has disconnected from the server.')
     def on_version(self, client, version):
         if client.version is not None:
             return
@@ -335,7 +383,7 @@ class Model(object):
             client.nick = username
         self.send_nick(client)
         # TODO: has left message if was already authenticated
-        self.send_talk('%s has joined the game.' % client.nick)
+        self.send_talk(f'{client.nick} has joined the game.')
     def on_chunk(self, client, p, q, key=0):
         packets = []
         p, q, key = map(int, (p, q, key))
@@ -488,31 +536,30 @@ class Model(object):
         text = ','.join(args)
         if text.startswith('/'):
             for pattern, func in self.patterns:
-                match = pattern.match(text)
-                if match:
+                if match := pattern.match(text):
                     func(client, *match.groups())
                     break
             else:
-                client.send(TALK, 'Unrecognized command: "%s"' % text)
+                client.send(TALK, f'Unrecognized command: "{text}"')
         elif text.startswith('@'):
             nick = text[1:].split(' ', 1)[0]
             for other in self.clients:
                 if other.nick == nick:
-                    client.send(TALK, '%s> %s' % (client.nick, text))
-                    other.send(TALK, '%s> %s' % (client.nick, text))
+                    client.send(TALK, f'{client.nick}> {text}')
+                    other.send(TALK, f'{client.nick}> {text}')
                     break
             else:
-                client.send(TALK, 'Unrecognized nick: "%s"' % nick)
+                client.send(TALK, f'Unrecognized nick: "{nick}"')
         else:
-            self.send_talk('%s> %s' % (client.nick, text))
+            self.send_talk(f'{client.nick}> {text}')
     def on_nick(self, client, nick=None):
         if AUTH_REQUIRED:
             client.send(TALK, 'You cannot change your nick on this server.')
             return
         if nick is None:
-            client.send(TALK, 'Your nickname is %s' % client.nick)
+            client.send(TALK, f'Your nickname is {client.nick}')
         else:
-            self.send_talk('%s is now known as %s' % (client.nick, nick))
+            self.send_talk(f'{client.nick} is now known as {nick}')
             client.nick = nick
             self.send_nick(client)
     def on_spawn(self, client):
@@ -524,7 +571,7 @@ class Model(object):
             clients = [x for x in self.clients if x != client]
             other = random.choice(clients) if clients else None
         else:
-            nicks = dict((client.nick, client) for client in self.clients)
+            nicks = {client.nick: client for client in self.clients}
             other = nicks.get(nick)
         if other:
             client.position = other.position
@@ -579,8 +626,7 @@ class Model(object):
             client.send(TALK, 'Help: /view N')
             client.send(TALK, 'Set viewing distance, 1 - 24.')
     def on_list(self, client):
-        client.send(TALK,
-            'Players: %s' % ', '.join(x.nick for x in self.clients))
+        client.send(TALK, f"Players: {', '.join(x.nick for x in self.clients)}")
     def send_positions(self, client):
         for other in self.clients:
             if other == client:

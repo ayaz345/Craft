@@ -182,8 +182,7 @@ def get_client():
     default_args = [DEFAULT_HOST, DEFAULT_PORT]
     args = sys.argv[1:] + [None] * len(default_args)
     host, port = [a or b for a, b in zip(args, default_args)]
-    client = Client(host, int(port))
-    return client
+    return Client(host, int(port))
 
 def main():
     client = get_client()
